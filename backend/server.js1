@@ -1,0 +1,90 @@
+// backend/server.js
+import express from "express";
+import cors from "cors";
+import nodemailer from "nodemailer";
+import sqlite3 from "sqlite3";
+import { open } from "sqlite";
+import dotenv from "dotenv";
+
+dotenv.config();
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// Connect to SQLite DB
+const dbPromise = open({
+  filename: "./data.db",
+  driver: sqlite3.Database,
+});
+
+// Create tables if not exist
+(async () => {
+  const db = await dbPromise;
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS bookings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      pickup TEXT, dropoff TEXT, date TEXT, payment TEXT, phone TEXT, status TEXT DEFAULT 'Pending'
+    );
+  `);
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS contact_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT, email TEXT, message TEXT
+    );
+  `);
+})();
+
+// Setup email
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+});
+
+// Routes
+app.get("/", (req, res) => res.send("🚚 Shesha Delivery API running!"));
+
+// Booking endpoint
+app.post("/api/book", async (req, res) => {
+  const { pickup, dropoff, date, payment, phone } = req.body;
+  if (!pickup || !dropoff || !phone) return res.status(400).send("Missing info");
+  const db = await dbPromise;
+  await db.run(`INSERT INTO bookings (pickup, dropoff, date, payment, phone) VALUES (?, ?, ?, ?, ?)`,
+    [pickup, dropoff, date, payment, phone]);
+  const mail = {
+    from: process.env.GMAIL_USER,
+    to: ["lungelothandukwazi@gmail.com", "mcusimanana2795@gmail.com"],
+    subject: "New Booking - Shesha Delivery",
+    text: `Pickup: ${pickup}\nDropoff: ${dropoff}\nDate: ${date}\nPayment: ${payment}\nPhone: ${phone}`,
+  };
+  await transporter.sendMail(mail);
+  res.send({ success: true });
+});
+
+// Contact endpoint
+app.post("/api/contact", async (req, res) => {
+  const { name, email, message } = req.body;
+  const db = await dbPromise;
+  await db.run(`INSERT INTO contact_messages (name, email, message) VALUES (?, ?, ?)`, [name, email, message]);
+  await transporter.sendMail({
+    from: process.env.GMAIL_USER,
+    to: ["lungelothandukwazi@gmail.com", "mcusimanana2795@gmail.com"],
+    subject: "New Contact Message",
+    text: `From: ${name} (${email})\n\n${message}`,
+  });
+  res.send({ success: true });
+});
+
+// Track endpoint
+app.get("/api/track/:id", async (req, res) => {
+  const db = await dbPromise;
+  const booking = await db.get(`SELECT * FROM bookings WHERE id = ?`, [req.params.id]);
+  if (!booking) return res.status(404).send({ error: "Not found" });
+  res.send(booking);
+});
+
+// Start server
+const PORT = process.env.PORT || 4000;
+app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
